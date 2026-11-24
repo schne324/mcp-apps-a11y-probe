@@ -1,0 +1,14 @@
+{
+  "name": "mcp-apps-a11y-probe",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP App that records the HostContext and accessibility media queries a real host gives it",
+  "scripts": { "start": "node server.mjs", "selftest": "node selftest.mjs" },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "2.0.4",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": { "playwright": "1.65.1" }
+}

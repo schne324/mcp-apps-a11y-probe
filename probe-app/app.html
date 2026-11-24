@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>A11y preference probe</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 12px; }
+  table { border-collapse: collapse; }
+  td, th { border: 1px solid currentColor; padding: 2px 6px; text-align: left; }
+  pre { white-space: pre-wrap; font-size: 12px; max-height: 260px; overflow: auto; }
+  .on { font-weight: bold; }
+</style>
+</head>
+<body>
+<h1 style="font-size: 16px">Accessibility preference probe</h1>
+<p id="status">Connecting to host…</p>
+<table><thead><tr><th>Media query (inside the app frame)</th><th>Matches</th></tr></thead><tbody id="mq"></tbody></table>
+<p id="metrics"></p>
+<h2 style="font-size: 14px">HostContext as sent by the host</h2>
+<pre id="ctx"></pre>
+<script>
+// Hand-written MCP Apps view side (ui/initialize handshake, host-context-changed, tools/call), no SDK, so a strict host CSP can't block it.
+const QUERIES = [
+  '(prefers-color-scheme: dark)', '(prefers-contrast: more)', '(prefers-contrast: less)', '(prefers-contrast: custom)',
+  '(prefers-reduced-motion: reduce)', '(prefers-reduced-transparency: reduce)', '(forced-colors: active)', '(inverted-colors: inverted)',
+];
+let nextId = 1; const pending = new Map();
+let hostInfo = null; let hostContext = {}; let seq = 0;
+function send(msg) { window.parent.postMessage({ jsonrpc: '2.0', ...msg }, '*'); }
+function request(method, params) {
+  const id = nextId++;
+  return new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); send({ id, method, params }); });
+}
+function media() { return Object.fromEntries(QUERIES.map((q) => [q, matchMedia(q).matches])); }
+function metrics() {
+  const root = getComputedStyle(document.documentElement);
+  return { remPx: root.fontSize, devicePixelRatio, innerWidth, colorSchemeOnRoot: root.colorScheme, userAgent: navigator.userAgent };
+}
+function render() {
+  const m = media();
+  document.getElementById('mq').innerHTML = QUERIES.map((q) => `<tr><td>${q}</td><td class="${m[q] ? 'on' : ''}">${m[q]}</td></tr>`).join('');
+  document.getElementById('metrics').textContent = JSON.stringify(metrics());
+  document.getElementById('ctx').textContent = JSON.stringify(hostContext, null, 2);
+  const h = document.documentElement.scrollHeight;
+  send({ method: 'ui/notifications/size-changed', params: { height: h } });
+}
+async function report(reason) {
+  render();
+  const payload = { seq: ++seq, reason, at: new Date().toISOString(), hostInfo, hostContext, media: media(), metrics: metrics() };
+  try {
+    await request('tools/call', { name: 'a11y_probe_report', arguments: { report: JSON.stringify(payload) } });
+    document.getElementById('status').textContent = `Host: ${hostInfo?.name ?? '?'} ${hostInfo?.version ?? ''}. Reported #${seq} (${reason}).`;
+  } catch (e) {
+    document.getElementById('status').textContent = `Host: ${hostInfo?.name ?? '?'}. Could not report #${seq}: ${e.message}. Copy the panel below instead.`;
+  }
+}
+window.addEventListener('message', (e) => {
+  const d = e.data; if (!d || d.jsonrpc !== '2.0') return;
+  if (d.id != null && pending.has(d.id)) {
+    const p = pending.get(d.id); pending.delete(d.id);
+    d.error ? p.reject(new Error(d.error.message)) : p.resolve(d.result); return;
+  }
+  if (d.method === 'ui/notifications/host-context-changed') {
+    hostContext = { ...hostContext, ...d.params };
+    report('host-context-changed: ' + Object.keys(d.params || {}).join(','));
+  }
+  if (d.id != null && d.method === 'ping') send({ id: d.id, result: {} });
+});
+for (const q of QUERIES) matchMedia(q).addEventListener('change', () => report('media-change: ' + q));
+(async () => {
+  try {
+    const r = await request('ui/initialize', { appInfo: { name: 'a11y-preference-probe', version: '0.1.0' }, appCapabilities: {}, protocolVersion: '2026-01-26' });
+    hostInfo = r.hostInfo || null; hostContext = r.hostContext || {};
+    send({ method: 'ui/notifications/initialized', params: {} });
+    report('initialize');
+  } catch (e) {
+    document.getElementById('status').textContent = 'Handshake failed: ' + e.message; render();
+  }
+})();
+</script>
+</body>
+</html>
